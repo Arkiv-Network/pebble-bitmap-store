@@ -319,14 +319,40 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 							return fmt.Errorf("failed to insert payload at block %d txIndex %d opIndex %d: %w", block.Number, operation.TxIndex, operation.OpIndex, err)
 						}
 
-						err = cache.RemoveFromNumericBitmap(ctx, "$expiration", oldExpiration, oldID)
-						if err != nil {
-							return fmt.Errorf("failed to remove numeric attribute value bitmap: %w", err)
+						for k, v := range latestPayload.StringAttributes.Values {
+							err = cache.RemoveFromStringBitmap(ctx, k, v, oldID)
+							if err != nil {
+								return fmt.Errorf("failed to remove string attribute value bitmap: %w", err)
+							}
 						}
 
-						err = cache.AddToNumericBitmap(ctx, "$expiration", newToBlock, newID)
-						if err != nil {
-							return fmt.Errorf("failed to add numeric attribute value bitmap: %w", err)
+						for k, v := range latestPayload.NumericAttributes.Values {
+							switch k {
+							case "$txIndex", "$opIndex":
+								continue
+							}
+							err = cache.RemoveFromNumericBitmap(ctx, k, v, oldID)
+							if err != nil {
+								return fmt.Errorf("failed to remove numeric attribute value bitmap: %w", err)
+							}
+						}
+
+						for k, v := range latestPayload.StringAttributes.Values {
+							err = cache.AddToStringBitmap(ctx, k, v, newID)
+							if err != nil {
+								return fmt.Errorf("failed to add string attribute value bitmap: %w", err)
+							}
+						}
+
+						for k, v := range numericAttributes {
+							switch k {
+							case "$txIndex", "$opIndex":
+								continue
+							}
+							err = cache.AddToNumericBitmap(ctx, k, v, newID)
+							if err != nil {
+								return fmt.Errorf("failed to add numeric attribute value bitmap: %w", err)
+							}
 						}
 
 					case operation.ChangeOwner != nil:
@@ -338,7 +364,6 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 							return fmt.Errorf("failed to get latest payload: %w", err)
 						}
 						oldID := latestPayload.ID
-						oldOwner := latestPayload.StringAttributes.Values["$owner"]
 						newOwner := strings.ToLower(operation.ChangeOwner.Owner.Hex())
 
 						newStringAttrs := &store.StringAttributes{Values: maps.Clone(latestPayload.StringAttributes.Values)}
@@ -364,14 +389,40 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 							return fmt.Errorf("failed to insert payload at block %d txIndex %d opIndex %d: %w", block.Number, operation.TxIndex, operation.OpIndex, err)
 						}
 
-						err = cache.RemoveFromStringBitmap(ctx, "$owner", oldOwner, oldID)
-						if err != nil {
-							return fmt.Errorf("failed to remove string attribute value bitmap for owner: %w", err)
+						for k, v := range latestPayload.StringAttributes.Values {
+							err = cache.RemoveFromStringBitmap(ctx, k, v, oldID)
+							if err != nil {
+								return fmt.Errorf("failed to remove string attribute value bitmap: %w", err)
+							}
 						}
 
-						err = cache.AddToStringBitmap(ctx, "$owner", newOwner, newID)
-						if err != nil {
-							return fmt.Errorf("failed to add string attribute value bitmap for owner: %w", err)
+						for k, v := range latestPayload.NumericAttributes.Values {
+							switch k {
+							case "$txIndex", "$opIndex":
+								continue
+							}
+							err = cache.RemoveFromNumericBitmap(ctx, k, v, oldID)
+							if err != nil {
+								return fmt.Errorf("failed to remove numeric attribute value bitmap: %w", err)
+							}
+						}
+
+						for k, v := range newStringAttrs.Values {
+							err = cache.AddToStringBitmap(ctx, k, v, newID)
+							if err != nil {
+								return fmt.Errorf("failed to add string attribute value bitmap: %w", err)
+							}
+						}
+
+						for k, v := range latestPayload.NumericAttributes.Values {
+							switch k {
+							case "$txIndex", "$opIndex":
+								continue
+							}
+							err = cache.AddToNumericBitmap(ctx, k, v, newID)
+							if err != nil {
+								return fmt.Errorf("failed to add numeric attribute value bitmap: %w", err)
+							}
 						}
 
 					default:
@@ -381,11 +432,11 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 				}
 
 				s.log.Info("block updated", "block", block.Number, "creates", blockStat.creates, "updates", blockStat.updates, "deletes", blockStat.deletes, "extends", blockStat.extends, "ownerChanges", blockStat.ownerChanges)
-			}
 
-			err = cache.Flush(ctx)
-			if err != nil {
-				return fmt.Errorf("failed to flush bitmap cache: %w", err)
+				err = cache.Flush(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to flush bitmap cache: %w", err)
+				}
 			}
 
 			err = s.UpsertLastBlock(pBatch, lastBlock)
