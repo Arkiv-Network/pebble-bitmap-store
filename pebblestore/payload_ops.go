@@ -1,6 +1,7 @@
 package pebblestore
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -403,6 +404,95 @@ func (s *PebbleStore) RetrievePayloads(reader pebble.Reader, ids []uint64) ([]Re
 	// Sort by ID descending.
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].ID > rows[j].ID
+	})
+
+	return rows, nil
+}
+
+// PayloadHistoryRow represents a single version of an entity returned by
+// GetPayloadHistoryByEntityKey.
+type PayloadHistoryRow struct {
+	ID                uint64
+	FromBlock         uint64
+	ToBlock           uint64
+	ToBlockIsNull     bool
+	EntityKey         []byte
+	ContentType       string
+	StringAttributes  *store.StringAttributes
+	NumericAttributes *store.NumericAttributes
+	Payload           []byte
+}
+
+// GetPayloadHistoryByEntityKey returns all payload versions (current and
+// historical) for the given 32-byte entity key, sorted by FromBlock ascending.
+// It scans all 0x02 payload entries, comparing the entity key embedded at a
+// known offset to avoid full decoding of non-matching records.
+func (s *PebbleStore) GetPayloadHistoryByEntityKey(entityKey []byte) ([]PayloadHistoryRow, error) {
+	snap := s.db.NewSnapshot()
+	defer snap.Close()
+
+	// entityKey offset inside the encoded payload value:
+	// fromBlock(8) + toBlock(8) + toBlockIsNull(1) = 17
+	const entityKeyOffset = 8 + 8 + 1
+	const entityKeyLen = 32
+	const minValueLen = entityKeyOffset + entityKeyLen
+
+	lower := []byte{prefixPayload}
+	upper := []byte{prefixPayload + 1}
+
+	iter, err := snap.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: upper,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pebblestore: new iter for history: %w", err)
+	}
+	defer iter.Close()
+
+	var rows []PayloadHistoryRow
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		val := iter.Value()
+		if len(val) < minValueLen {
+			continue
+		}
+
+		// Fast path: compare entity key bytes without full decode.
+		if !bytes.Equal(val[entityKeyOffset:entityKeyOffset+entityKeyLen], entityKey[:32]) {
+			continue
+		}
+
+		// Copy value before decoding (iterator reuses buffer).
+		data := make([]byte, len(val))
+		copy(data, val)
+
+		d, err := decodePayloadValue(data)
+		if err != nil {
+			return nil, err
+		}
+
+		id := parsePayloadKey(iter.Key())
+
+		rows = append(rows, PayloadHistoryRow{
+			ID:                id,
+			FromBlock:         d.FromBlock,
+			ToBlock:           d.ToBlock,
+			ToBlockIsNull:     d.ToBlockIsNull,
+			EntityKey:         d.EntityKey,
+			ContentType:       d.ContentType,
+			StringAttributes:  d.StringAttributes,
+			NumericAttributes: d.NumericAttributes,
+			Payload:           d.Payload,
+		})
+	}
+
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("pebblestore: iter error in history: %w", err)
+	}
+
+	// Sort by FromBlock ascending (chronological order).
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].FromBlock < rows[j].FromBlock
 	})
 
 	return rows, nil
