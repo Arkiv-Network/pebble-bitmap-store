@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Arkiv-Network/pebble-bitmap-store/pebblestore"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/urfave/cli/v2"
 )
 
@@ -18,7 +19,8 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	cfg := struct {
-		dbPath string
+		dbPath      string
+		blockNumber uint64
 	}{}
 
 	app := &cli.App{
@@ -30,6 +32,12 @@ func main() {
 				Value:       "arkiv-data.db",
 				Destination: &cfg.dbPath,
 				EnvVars:     []string{"DB_PATH"},
+			},
+			&cli.Uint64Flag{
+				Name:        "block-number",
+				Value:       0,
+				Destination: &cfg.blockNumber,
+				EnvVars:     []string{"BLOCK_NUMBER"},
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -52,6 +60,7 @@ func main() {
 				context.Background(),
 				queryString,
 				&pebblestore.Options{
+					AtBlock: pointerOf(hexutil.Uint64(cfg.blockNumber)),
 					IncludeData: &pebblestore.IncludeData{
 						Key:                         true,
 						ContentType:                 true,
@@ -90,4 +99,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func pointerOf[T any](v T) *T {
+	return &v
 }
