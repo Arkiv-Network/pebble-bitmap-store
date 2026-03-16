@@ -28,6 +28,10 @@ func (s *PebbleStore) PruneBefore(ctx context.Context, block uint64) error {
 		return fmt.Errorf("pebblestore: prune numeric bitmaps: %w", err)
 	}
 
+	if err := s.pruneEntityCounts(batch, block); err != nil {
+		return fmt.Errorf("pebblestore: prune entity counts: %w", err)
+	}
+
 	return batch.Commit(pebble.Sync)
 }
 
@@ -328,6 +332,10 @@ func (s *PebbleStore) HandleReorg(ctx context.Context, block uint64) error {
 		return fmt.Errorf("pebblestore: delete bitmap entries: %w", err)
 	}
 
+	if err := s.deleteEntityCountEntriesAfter(batch, block); err != nil {
+		return fmt.Errorf("pebblestore: delete entity count entries: %w", err)
+	}
+
 	if err := s.UpsertLastBlock(batch, block); err != nil {
 		return fmt.Errorf("pebblestore: update last block: %w", err)
 	}
@@ -562,4 +570,75 @@ func (s *PebbleStore) deleteNumericBitmapEntriesAfter(batch *pebble.Batch, block
 	}
 
 	return iter.Error()
+}
+
+// deleteEntityCountEntriesAfter removes all 0x07 entity count entries whose
+// block number is greater than the given block.
+func (s *PebbleStore) deleteEntityCountEntriesAfter(batch *pebble.Batch, block uint64) error {
+	var lower []byte
+	if block < ^uint64(0) {
+		lower = entityCountKey(block + 1)
+	} else {
+		return nil // block is max uint64; nothing to delete
+	}
+	upper := []byte{prefixEntityCount + 1}
+
+	iter, err := batch.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: upper,
+	})
+	if err != nil {
+		return fmt.Errorf("create entity count iterator: %w", err)
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		keyToDelete := make([]byte, len(iter.Key()))
+		copy(keyToDelete, iter.Key())
+		if err := batch.Delete(keyToDelete, pebble.Sync); err != nil {
+			return fmt.Errorf("delete entity count key: %w", err)
+		}
+	}
+
+	return iter.Error()
+}
+
+// pruneEntityCounts removes 0x07 entity count entries with block strictly less
+// than the given block, keeping the latest entry before the boundary as a base
+// for historical queries.
+func (s *PebbleStore) pruneEntityCounts(batch *pebble.Batch, block uint64) error {
+	lower := []byte{prefixEntityCount}
+	upper := entityCountKey(block)
+
+	iter, err := batch.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: upper,
+	})
+	if err != nil {
+		return fmt.Errorf("create entity count iterator: %w", err)
+	}
+	defer iter.Close()
+
+	// Collect all keys, then delete all except the last one (the latest
+	// entry before the prune boundary).
+	var keys [][]byte
+	for iter.First(); iter.Valid(); iter.Next() {
+		k := make([]byte, len(iter.Key()))
+		copy(k, iter.Key())
+		keys = append(keys, k)
+	}
+	if err := iter.Error(); err != nil {
+		return err
+	}
+
+	// Keep the last key as the base for historical lookups.
+	if len(keys) > 1 {
+		for _, k := range keys[:len(keys)-1] {
+			if err := batch.Delete(k, pebble.Sync); err != nil {
+				return fmt.Errorf("delete entity count key: %w", err)
+			}
+		}
+	}
+
+	return nil
 }

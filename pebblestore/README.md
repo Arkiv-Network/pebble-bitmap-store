@@ -12,6 +12,7 @@ The store uses **prefix-namespaced binary keys**. All multi-byte integers are bi
 | `0x04` | `[0x04][fromBlock:8BE][id:8BE]` | `[toBlock:8BE][toBlockIsNull:1]` | **From-block index** — temporal index for range queries |
 | `0x05` | `[0x05][toBlock:8BE][id:8BE]` | empty | **To-block index** — used for pruning closed payloads |
 | `0x06` | `[0x06]` | `uint64 BE` | **ID counter** — monotonically increasing, persisted across restarts |
+| `0x07` | `[0x07][block:8BE]` | `int64 BE` | **Entity count** — number of active entities at the given block height |
 | `0x10` | `[0x10][nameLen:2BE][name][valueLen:2BE][value][block:8BE]` | `[isKeyframe:1][roaring bitmap bytes]` | **String bitmap index** |
 | `0x20` | `[0x20][nameLen:2BE][name][value:8BE][block:8BE]` | `[isKeyframe:1][roaring bitmap bytes]` | **Numeric bitmap index** |
 
@@ -41,6 +42,8 @@ Each blockchain event batch is processed atomically in a single `pebble.IndexedB
 3. **Delete/Expire** — Removes bitmap memberships for the current version, then closes it.
 
 4. **ExtendBTL / ChangeOwner** — Close-and-reinsert pattern, modifying only the relevant attribute.
+
+At the end of each block, the net entity count change is computed (creates that introduce a new entity increment by 1, deletes/expires decrement by 1, updates and other operations are net zero) and persisted under the `0x07` prefix. This allows `GetNumberOfEntities(ctx, block)` to return the count at any historical block height via a single seek, rather than scanning all `0x03` keys. For pre-upgrade databases without `0x07` entries, the first `FollowEvents` call seeds the counter by scanning `0x03`.
 
 ## Bitmap Index
 
@@ -82,5 +85,5 @@ For "all current entities" queries without attribute filters, `EvaluateAllCurren
 
 ## Maintenance
 
-- **Pruning** (`PruneBefore`): Deletes closed payloads (`toBlock <= threshold`) and their index entries. For bitmaps, finds the latest keyframe at-or-before the threshold and deletes all entries before it.
-- **Reorg handling** (`HandleReorg`): Rolls back to a block by reopening payloads closed after that block, deleting payloads created after it, and removing bitmap entries with block > target.
+- **Pruning** (`PruneBefore`): Deletes closed payloads (`toBlock <= threshold`) and their index entries. For bitmaps, finds the latest keyframe at-or-before the threshold and deletes all entries before it. For entity counts, removes old `0x07` entries before the threshold while keeping the latest one as a base for historical lookups.
+- **Reorg handling** (`HandleReorg`): Rolls back to a block by reopening payloads closed after that block, deleting payloads created after it, removing bitmap entries with block > target, and deleting entity count entries after the target block.
