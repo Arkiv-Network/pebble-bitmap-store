@@ -2,6 +2,7 @@ package pebblestore
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"maps"
 	"strings"
@@ -70,6 +71,19 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 			// Create bitmap cache once per batch; reuse across blocks.
 			cache := newBitmapCache(s, pBatch, pBatch, firstBlock)
 
+			// Seed entity count from the latest persisted value. Falls back
+			// to scanning 0x03 keys for databases that predate tracking.
+			entityCount, _, ecFound, ecErr := s.readLatestEntityCount(pBatch)
+			if ecErr != nil {
+				return fmt.Errorf("failed to read entity count: %w", ecErr)
+			}
+			if !ecFound {
+				entityCount, ecErr = s.countEntityCurrentKeys(pBatch)
+				if ecErr != nil {
+					return fmt.Errorf("failed to count entities: %w", ecErr)
+				}
+			}
+
 		mainLoop:
 			for _, block := range batch.Batch.Blocks {
 
@@ -84,6 +98,8 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 				blockStat := stats[block.Number]
 
 				cache.SetBlock(block.Number)
+
+				var entityDelta int64
 
 				updatesMap := map[common.Hash][]*events.OPUpdate{}
 
@@ -120,6 +136,17 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 						numericAttributes["$sequence"] = sequence
 						numericAttributes["$txIndex"] = uint64(operation.TxIndex)
 						numericAttributes["$opIndex"] = uint64(operation.OpIndex)
+
+						// Check if the entity already exists before closing.
+						ecVal, ecCloser, ecLookupErr := pBatch.Get(entityCurrentKey(operation.Create.Key.Bytes()))
+						entityExisted := ecLookupErr == nil
+						if entityExisted {
+							_ = ecVal
+							ecCloser.Close()
+						}
+						if !entityExisted {
+							entityDelta++
+						}
 
 						// Close any existing version (handles re-creation after delete).
 						_ = s.ClosePayloadVersion(pBatch, pBatch, operation.Create.Key.Bytes(), block.Number)
@@ -249,6 +276,7 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 						}
 
 					case operation.Delete != nil || operation.Expire != nil:
+						entityDelta--
 						blockStat.deletes++
 						var key []byte
 						if operation.Delete != nil {
@@ -429,6 +457,14 @@ func (s *PebbleStore) FollowEvents(ctx context.Context, iterator arkivevents.Bat
 						return fmt.Errorf("unknown operation: %v", operation)
 					}
 
+				}
+
+				// Persist entity count for this block.
+				entityCount += entityDelta
+				var ecBuf [8]byte
+				binary.BigEndian.PutUint64(ecBuf[:], uint64(entityCount))
+				if err := pBatch.Set(entityCountKey(block.Number), ecBuf[:], pebble.Sync); err != nil {
+					return fmt.Errorf("failed to write entity count: %w", err)
 				}
 
 				s.log.Info("block updated", "block", block.Number, "creates", blockStat.creates, "updates", blockStat.updates, "deletes", blockStat.deletes, "extends", blockStat.extends, "ownerChanges", blockStat.ownerChanges)

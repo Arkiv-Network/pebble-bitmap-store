@@ -10,6 +10,7 @@ const (
 	prefixFromBlockIndex byte = 0x04
 	prefixToBlockIndex   byte = 0x05
 	prefixIDCounter      byte = 0x06
+	prefixEntityCount    byte = 0x07
 	prefixStringBitmap   byte = 0x10
 	prefixNumericBitmap  byte = 0x20
 )
@@ -24,6 +25,15 @@ func lastBlockKey() []byte {
 // Layout: [0x06]
 func idCounterKey() []byte {
 	return []byte{prefixIDCounter}
+}
+
+// entityCountKey returns the key for the entity count at a given block.
+// Layout: [0x07][block:8BE]
+func entityCountKey(block uint64) []byte {
+	key := make([]byte, 1+8)
+	key[0] = prefixEntityCount
+	binary.BigEndian.PutUint64(key[1:], block)
+	return key
 }
 
 // payloadKey returns the key for a payload record identified by id.

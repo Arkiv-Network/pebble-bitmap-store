@@ -86,9 +86,90 @@ func (s *PebbleStore) EvaluateAllAtBlock(ctx context.Context, reader pebble.Read
 	return ids, nil
 }
 
-// GetNumberOfEntities returns the number of entities that currently have an
-// active payload by counting all keys with the entity-current prefix (0x03).
-func (s *PebbleStore) GetNumberOfEntities(ctx context.Context, reader pebble.Reader) (int64, error) {
+// GetNumberOfEntities returns the number of active entities at the given block
+// height. Pass block=0 for the latest block. The count is retrieved via a
+// single seek on the persisted per-block entity count (0x07 prefix).
+func (s *PebbleStore) GetNumberOfEntities(ctx context.Context, block uint64) (int64, error) {
+	snap := s.db.NewSnapshot()
+	defer snap.Close()
+
+	if block == 0 {
+		count, _, found, err := s.readLatestEntityCount(snap)
+		if err != nil {
+			return 0, err
+		}
+		if found {
+			return count, nil
+		}
+		// Fallback for pre-upgrade DBs: scan 0x03 keys.
+		return s.countEntityCurrentKeys(snap)
+	}
+
+	return s.readEntityCountAtBlock(snap, block)
+}
+
+// readLatestEntityCount seeks to the last 0x07 entry and returns its count
+// and block number. found is false when no entries exist.
+func (s *PebbleStore) readLatestEntityCount(reader pebble.Reader) (count int64, block uint64, found bool, err error) {
+	lower := []byte{prefixEntityCount}
+	upper := []byte{prefixEntityCount + 1}
+
+	iter, err := reader.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: upper,
+	})
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("pebblestore: create entity count iterator: %w", err)
+	}
+	defer iter.Close()
+
+	if !iter.Last() {
+		return 0, 0, false, iter.Error()
+	}
+
+	val, err := iter.ValueAndErr()
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("pebblestore: read entity count value: %w", err)
+	}
+
+	count = int64(binary.BigEndian.Uint64(val))
+	block = binary.BigEndian.Uint64(iter.Key()[1:])
+	return count, block, true, nil
+}
+
+// readEntityCountAtBlock finds the entity count at or before the given block.
+func (s *PebbleStore) readEntityCountAtBlock(reader pebble.Reader, block uint64) (int64, error) {
+	lower := []byte{prefixEntityCount}
+	upper := []byte{prefixEntityCount + 1}
+
+	iter, err := reader.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: upper,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("pebblestore: create entity count iterator: %w", err)
+	}
+	defer iter.Close()
+
+	// Seek to block+1 then step back to find the entry at or before block.
+	target := entityCountKey(block + 1)
+	iter.SeekLT(target)
+	if !iter.Valid() {
+		// No entry at or before this block — zero entities.
+		return 0, iter.Error()
+	}
+
+	val, err := iter.ValueAndErr()
+	if err != nil {
+		return 0, fmt.Errorf("pebblestore: read entity count value: %w", err)
+	}
+
+	return int64(binary.BigEndian.Uint64(val)), nil
+}
+
+// countEntityCurrentKeys counts active entities by scanning 0x03 keys.
+// Used as a one-time fallback for databases that predate per-block tracking.
+func (s *PebbleStore) countEntityCurrentKeys(reader pebble.Reader) (int64, error) {
 	lower := []byte{prefixEntityCurrent}
 	upper := []byte{prefixEntityCurrent + 1}
 
