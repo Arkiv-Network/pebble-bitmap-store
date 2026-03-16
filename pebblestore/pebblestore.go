@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/vfs"
 )
 
 // PebbleStore implements bitmap storage backed by PebbleDB.
@@ -24,14 +25,20 @@ type PebbleStore struct {
 // store. The ID counter is loaded from the database so that nextID picks up
 // where a previous run left off.
 func NewPebbleStore(log *slog.Logger, dbPath string) (*PebbleStore, error) {
-	if err := os.MkdirAll(dbPath, 0o755); err != nil {
-		return nil, fmt.Errorf("pebblestore: create directory: %w", err)
-	}
 
 	opts := &pebble.Options{
 		Levels: []pebble.LevelOptions{
 			{Compression: pebble.SnappyCompression},
 		},
+	}
+
+	if dbPath != "" {
+		err := os.MkdirAll(dbPath, 0o755)
+		if err != nil {
+			return nil, fmt.Errorf("pebblestore: create directory: %w", err)
+		}
+	} else {
+		opts.FS = vfs.NewMem()
 	}
 
 	db, err := pebble.Open(dbPath, opts)
