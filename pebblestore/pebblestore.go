@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/bloom"
 	"github.com/cockroachdb/pebble/vfs"
 )
 
@@ -25,13 +26,35 @@ type PebbleStore struct {
 // store. The ID counter is loaded from the database so that nextID picks up
 // where a previous run left off.
 func NewPebbleStore(log *slog.Logger, dbPath string) (*PebbleStore, error) {
+	cache := pebble.NewCache(512 << 20)
+	defer cache.Unref()
 
-	opts := &pebble.Options{
-		Levels: []pebble.LevelOptions{
-			{Compression: pebble.SnappyCompression},
-		},
+	levelOpts := func(compression pebble.Compression) pebble.LevelOptions {
+		return pebble.LevelOptions{
+			BlockSize:    32 << 10,
+			Compression:  compression,
+			FilterPolicy: bloom.FilterPolicy(10),
+			FilterType:   pebble.TableFilter,
+		}
 	}
 
+	opts := &pebble.Options{
+		Cache:        cache,
+		MemTableSize: 64 << 20,
+		MaxConcurrentCompactions: func() int { return 2 },
+		BytesPerSync:    1 << 20,
+		WALBytesPerSync: 1 << 20,
+		Levels: []pebble.LevelOptions{
+			levelOpts(pebble.SnappyCompression), // L0
+			levelOpts(pebble.SnappyCompression), // L1
+			levelOpts(pebble.SnappyCompression), // L2
+			levelOpts(pebble.SnappyCompression), // L3
+			levelOpts(pebble.SnappyCompression), // L4
+			levelOpts(pebble.SnappyCompression), // L5
+			levelOpts(pebble.ZstdCompression),   // L6
+		},
+	}
+	
 	if dbPath != "" {
 		err := os.MkdirAll(dbPath, 0o755)
 		if err != nil {
