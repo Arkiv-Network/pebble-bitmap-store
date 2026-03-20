@@ -4,15 +4,15 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"sort"
 
+	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/cockroachdb/pebble"
 )
 
-// EvaluateAllCurrent returns the IDs of all entities that have a current
-// (active) payload, sorted by ID descending. It scans all keys with the
-// entity-current prefix (0x03).
-func (s *PebbleStore) EvaluateAllCurrent(ctx context.Context, reader pebble.Reader) ([]uint64, error) {
+// EvaluateAllCurrent returns a bitmap of all entities that have a current
+// (active) payload. It scans all keys with the entity-current prefix (0x03)
+// and adds each ID directly to the bitmap.
+func (s *PebbleStore) EvaluateAllCurrent(ctx context.Context, reader pebble.Reader) (*roaring64.Bitmap, error) {
 	lower := []byte{prefixEntityCurrent}
 	upper := []byte{prefixEntityCurrent + 1}
 
@@ -25,29 +25,23 @@ func (s *PebbleStore) EvaluateAllCurrent(ctx context.Context, reader pebble.Read
 	}
 	defer iter.Close()
 
-	var ids []uint64
+	bm := roaring64.New()
 	for iter.First(); iter.Valid(); iter.Next() {
 		val, err := iter.ValueAndErr()
 		if err != nil {
 			return nil, fmt.Errorf("pebblestore: read value: %w", err)
 		}
-		id := binary.BigEndian.Uint64(val)
-		ids = append(ids, id)
+		bm.Add(binary.BigEndian.Uint64(val))
 	}
 
-	// Sort descending to match SQLite's ORDER BY id DESC.
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] > ids[j]
-	})
-
-	return ids, nil
+	return bm, nil
 }
 
-// EvaluateAllAtBlock returns the IDs of all entities that were active at the
-// given block number, sorted by ID descending. An entity is considered active
-// at a block if its fromBlock <= block and either its toBlock is null (still
-// active) or its toBlock > block.
-func (s *PebbleStore) EvaluateAllAtBlock(ctx context.Context, reader pebble.Reader, block uint64) ([]uint64, error) {
+// EvaluateAllAtBlock returns a bitmap of all entities that were active at the
+// given block number. An entity is considered active at a block if its
+// fromBlock <= block and either its toBlock is null (still active) or its
+// toBlock > block.
+func (s *PebbleStore) EvaluateAllAtBlock(ctx context.Context, reader pebble.Reader, block uint64) (*roaring64.Bitmap, error) {
 	lower := fromBlockIndexKey(0, 0)
 	upper := fromBlockIndexKey(block+1, 0)
 
@@ -60,7 +54,7 @@ func (s *PebbleStore) EvaluateAllAtBlock(ctx context.Context, reader pebble.Read
 	}
 	defer iter.Close()
 
-	var ids []uint64
+	bm := roaring64.New()
 	for iter.First(); iter.Valid(); iter.Next() {
 		_, id := parseFromBlockIndexKey(iter.Key())
 
@@ -74,16 +68,11 @@ func (s *PebbleStore) EvaluateAllAtBlock(ctx context.Context, reader pebble.Read
 		toBlockIsNull := val[8] == 0x01
 
 		if toBlockIsNull || toBlock > block {
-			ids = append(ids, id)
+			bm.Add(id)
 		}
 	}
 
-	// Sort descending to match SQLite's ORDER BY id DESC.
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] > ids[j]
-	})
-
-	return ids, nil
+	return bm, nil
 }
 
 // GetNumberOfEntities returns the number of active entities at the given block

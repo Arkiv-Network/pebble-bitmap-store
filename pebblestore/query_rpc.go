@@ -9,12 +9,10 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
-	"github.com/cockroachdb/pebble"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/Arkiv-Network/pebble-bitmap-store/query"
-	"github.com/Arkiv-Network/pebble-bitmap-store/store"
 )
 
 const QueryResultCountLimit uint64 = 200
@@ -110,111 +108,6 @@ type Attribute[T any] struct {
 	Value T      `json:"value"`
 }
 
-// snapshotEvaluator wraps a PebbleStore and a pebble.Snapshot to implement
-// the query.Evaluator interface. Every method delegates to the corresponding
-// PebbleStore method, passing the snapshot as the pebble.Reader.
-type snapshotEvaluator struct {
-	store *PebbleStore
-	snap  *pebble.Snapshot
-}
-
-// Compile-time check that snapshotEvaluator satisfies query.Evaluator.
-var _ query.Evaluator = (*snapshotEvaluator)(nil)
-
-func (e *snapshotEvaluator) EvaluateAllCurrent(ctx context.Context) ([]uint64, error) {
-	return e.store.EvaluateAllCurrent(ctx, e.snap)
-}
-
-func (e *snapshotEvaluator) EvaluateAllAtBlock(ctx context.Context, block uint64) ([]uint64, error) {
-	return e.store.EvaluateAllAtBlock(ctx, e.snap, block)
-}
-
-// --- String value enumeration ---
-
-func (e *snapshotEvaluator) GetMatchingStringValuesEqual(ctx context.Context, name, value string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesEqual(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesNotEqual(ctx context.Context, name, value string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesNotEqual(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesLessThan(ctx context.Context, name, value string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesLessThan(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesGreaterThan(ctx context.Context, name, value string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesGreaterThan(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesLessOrEqualThan(ctx context.Context, name, value string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesLessOrEqualThan(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesGreaterOrEqualThan(ctx context.Context, name, value string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesGreaterOrEqualThan(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesGlob(ctx context.Context, name, pattern string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesGlob(ctx, e.snap, name, pattern, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesNotGlob(ctx context.Context, name, pattern string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesNotGlob(ctx, e.snap, name, pattern, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesInclusion(ctx context.Context, name string, values []string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesInclusion(ctx, e.snap, name, values, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingStringValuesNotInclusion(ctx context.Context, name string, values []string, targetBlock uint64) ([]string, error) {
-	return e.store.GetMatchingStringValuesNotInclusion(ctx, e.snap, name, values, targetBlock)
-}
-
-// --- Numeric value enumeration ---
-
-func (e *snapshotEvaluator) GetMatchingNumericValuesEqual(ctx context.Context, name string, value, targetBlock uint64) ([]uint64, error) {
-	return e.store.GetMatchingNumericValuesEqual(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingNumericValuesNotEqual(ctx context.Context, name string, value, targetBlock uint64) ([]uint64, error) {
-	return e.store.GetMatchingNumericValuesNotEqual(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingNumericValuesLessThan(ctx context.Context, name string, value, targetBlock uint64) ([]uint64, error) {
-	return e.store.GetMatchingNumericValuesLessThan(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingNumericValuesGreaterThan(ctx context.Context, name string, value, targetBlock uint64) ([]uint64, error) {
-	return e.store.GetMatchingNumericValuesGreaterThan(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingNumericValuesLessOrEqualThan(ctx context.Context, name string, value, targetBlock uint64) ([]uint64, error) {
-	return e.store.GetMatchingNumericValuesLessOrEqualThan(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingNumericValuesGreaterOrEqualThan(ctx context.Context, name string, value, targetBlock uint64) ([]uint64, error) {
-	return e.store.GetMatchingNumericValuesGreaterOrEqualThan(ctx, e.snap, name, value, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingNumericValuesInclusion(ctx context.Context, name string, values []uint64, targetBlock uint64) ([]uint64, error) {
-	return e.store.GetMatchingNumericValuesInclusion(ctx, e.snap, name, values, targetBlock)
-}
-
-func (e *snapshotEvaluator) GetMatchingNumericValuesNotInclusion(ctx context.Context, name string, values []uint64, targetBlock uint64) ([]uint64, error) {
-	return e.store.GetMatchingNumericValuesNotInclusion(ctx, e.snap, name, values, targetBlock)
-}
-
-// --- Bitmap reconstruction ---
-
-func (e *snapshotEvaluator) ReconstructStringBitmapAtBlock(ctx context.Context, name, value string, block uint64) (*store.Bitmap, error) {
-	return e.store.ReconstructStringBitmapAtBlock(ctx, e.snap, name, value, block)
-}
-
-func (e *snapshotEvaluator) ReconstructNumericBitmapAtBlock(ctx context.Context, name string, value, block uint64) (*store.Bitmap, error) {
-	return e.store.ReconstructNumericBitmapAtBlock(ctx, e.snap, name, value, block)
-}
-
 const maxResultBytes = 512 * 1024 * 1024
 
 // QueryEntities parses and evaluates a query string against the store,
@@ -266,9 +159,7 @@ func (s *PebbleStore) QueryEntities(
 		return nil, fmt.Errorf("error parsing query: %w", err)
 	}
 
-	eval := &snapshotEvaluator{store: s, snap: snap}
-
-	bitmap, err := q.Evaluate(ctx, eval, options.GetAtBlock())
+	bitmap, err := evaluateAST(ctx, s, snap, q, options.GetAtBlock())
 	if err != nil {
 		return nil, fmt.Errorf("error evaluating query: %w", err)
 	}
