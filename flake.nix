@@ -1,8 +1,7 @@
 {
   description = "sqlite-bitmap-store";
   inputs = {
-    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
-
+    nixpkgs.url = "github:NixOS/nixpkgs";
     systems.url = "github:nix-systems/default";
   };
 
@@ -26,7 +25,10 @@
             '';
             hardeningDisable = [ "all" ];
 
-            packages = with pkgs; [ go ];
+            packages = with pkgs; [
+              gcc
+              go
+            ];
           };
         }
       );
